@@ -70,10 +70,12 @@ func NewJournalctlXIDCollector(
 		xidErrors:    make(map[string]XIDError),
 		scanInterval: 30 * time.Second, // Default scan interval
 		// Regex pattern to match XID errors in journalctl output
-		// Example: "NVRM: Xid (62): GPU has fallen off the bus"
-		xidPattern: regexp.MustCompile(`NVRM:\s+Xid\s+\((\d+)\):\s*(.+)`),
+		// Supports both formats:
+		// - "NVRM: Xid (62): GPU has fallen off the bus"
+		// - "NVRM: Xid (PCI:0018:01:00): 149, NETIR_INT Fatal"
+		xidPattern: regexp.MustCompile(`NVRM:\s+Xid\s+\([^)]*\):\s*(\d+),\s*(.+)|NVRM:\s+Xid\s+\((\d+)\):\s*(.+)`),
 		// Regex pattern to extract GPU index from PCI bus ID or other identifiers
-		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI\s+(\d+):`),
+		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI:(\d+):(\d+):(\d+)`),
 	}
 
 	var err error
@@ -196,12 +198,27 @@ func (c *journalctlXIDCollector) parseJournalctlOutput(output string) {
 			continue
 		}
 
-		xidCode, err := strconv.Atoi(matches[1])
-		if err != nil {
+		var xidCode int
+		var message string
+		var err error
+
+		// Handle PCI format: "NVRM: Xid (PCI:0018:01:00): 149, message"
+		if matches[1] != "" && matches[2] != "" {
+			xidCode, err = strconv.Atoi(matches[1])
+			if err != nil {
+				continue
+			}
+			message = matches[2]
+		} else if matches[3] != "" && matches[4] != "" {
+			// Handle simple format: "NVRM: Xid (62): message"
+			xidCode, err = strconv.Atoi(matches[3])
+			if err != nil {
+				continue
+			}
+			message = matches[4]
+		} else {
 			continue
 		}
-
-		message := matches[2]
 
 		// Try to extract GPU index from the line
 		gpuIndex := c.extractGPUIndex(line)
@@ -233,6 +250,15 @@ func (c *journalctlXIDCollector) extractGPUIndex(line string) int {
 	// Try to find GPU index in various formats
 	matches := c.gpuIndexPattern.FindStringSubmatch(line)
 	if len(matches) > 1 {
+		// Handle PCI format: PCI:0018:01:00
+		if matches[3] != "" && matches[4] != "" && matches[5] != "" {
+			// Use the device number (third component) as GPU index
+			if index, err := strconv.Atoi(matches[4]); err == nil {
+				return index
+			}
+		}
+
+		// Handle other formats: GPU 1, nvidia1, PCI 1:
 		for i := 1; i < len(matches); i++ {
 			if matches[i] != "" {
 				if index, err := strconv.Atoi(matches[i]); err == nil {

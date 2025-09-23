@@ -242,21 +242,23 @@ func TestNewJournalctlXIDCollector(t *testing.T) {
 func TestJournalctlXIDCollector_parseJournalctlOutput(t *testing.T) {
 	collector := &journalctlXIDCollector{
 		xidErrors:       make(map[string]XIDError),
-		xidPattern:      regexp.MustCompile(`NVRM:\s+Xid\s+\((\d+)\):\s*(.+)`),
-		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI\s+(\d+):`),
+		xidPattern:      regexp.MustCompile(`NVRM:\s+Xid\s+\([^)]*\):\s*(\d+),\s*(.+)|NVRM:\s+Xid\s+\((\d+)\):\s*(.+)`),
+		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI:(\d+):(\d+):(\d+)`),
 	}
 
-	// Test journalctl output with XID errors
+	// Test journalctl output with XID errors (both formats)
 	testOutput := `2024-01-15T10:30:45+0000 hostname kernel: NVRM: Xid (62): GPU has fallen off the bus
 2024-01-15T10:31:00+0000 hostname kernel: NVRM: Xid (48): Double Bit ECC Error on GPU 0
-2024-01-15T10:32:15+0000 hostname kernel: NVRM: Xid (79): GPU has fallen off the bus on nvidia1`
+2024-01-15T10:32:15+0000 hostname kernel: NVRM: Xid (79): GPU has fallen off the bus on nvidia1
+Sep 19 10:30:06 coastline-turtle-cn02 kernel: NVRM: Xid (PCI:0018:01:00): 149, NETIR_INT  Fatal   XC0 i0 Link -1
+Sep 19 10:30:06 coastline-turtle-cn02 kernel: NVRM: Xid (PCI:0018:01:00): 154, GPU recovery action changed from 0x0 (None) to 0x4 (Drain and Reset)`
 
 	collector.parseJournalctlOutput(testOutput)
 
 	// Check that XID errors were parsed correctly
-	assert.Len(t, collector.xidErrors, 3, "Expected 3 XID errors to be parsed")
+	assert.Len(t, collector.xidErrors, 5, "Expected 5 XID errors to be parsed")
 
-	// Check specific XID error
+	// Check specific XID error (simple format)
 	xid62Key := "0:62"
 	xid62, exists := collector.xidErrors[xid62Key]
 	assert.True(t, exists, "XID 62 error should exist")
@@ -276,11 +278,25 @@ func TestJournalctlXIDCollector_parseJournalctlOutput(t *testing.T) {
 	assert.True(t, exists, "XID 79 error should exist")
 	assert.Equal(t, 79, xid79.XIDCode, "XID code should be 79")
 	assert.Equal(t, "GPU has fallen off the bus on nvidia1", xid79.Message, "XID message should match")
+
+	// Check PCI format XID 149 error
+	xid149Key := "1:149"
+	xid149, exists := collector.xidErrors[xid149Key]
+	assert.True(t, exists, "XID 149 error should exist")
+	assert.Equal(t, 149, xid149.XIDCode, "XID code should be 149")
+	assert.Equal(t, "NETIR_INT  Fatal   XC0 i0 Link -1", xid149.Message, "XID message should match")
+
+	// Check PCI format XID 154 error
+	xid154Key := "1:154"
+	xid154, exists := collector.xidErrors[xid154Key]
+	assert.True(t, exists, "XID 154 error should exist")
+	assert.Equal(t, 154, xid154.XIDCode, "XID code should be 154")
+	assert.Equal(t, "GPU recovery action changed from 0x0 (None) to 0x4 (Drain and Reset)", xid154.Message, "XID message should match")
 }
 
 func TestJournalctlXIDCollector_extractGPUIndex(t *testing.T) {
 	collector := &journalctlXIDCollector{
-		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI\s+(\d+):`),
+		gpuIndexPattern: regexp.MustCompile(`GPU\s+(\d+)|nvidia(\d+)|PCI:(\d+):(\d+):(\d+)`),
 	}
 
 	tests := []struct {
@@ -299,9 +315,14 @@ func TestJournalctlXIDCollector_extractGPUIndex(t *testing.T) {
 			expected: 2,
 		},
 		{
-			name:     "PCI bus in message",
-			line:     "NVRM: Xid (79): PCI 3: GPU error",
-			expected: 3,
+			name:     "PCI format in XID",
+			line:     "NVRM: Xid (PCI:0018:01:00): 149, NETIR_INT Fatal",
+			expected: 1,
+		},
+		{
+			name:     "PCI format with different device",
+			line:     "NVRM: Xid (PCI:0018:02:00): 154, GPU recovery action",
+			expected: 2,
 		},
 		{
 			name:     "no GPU index found",
