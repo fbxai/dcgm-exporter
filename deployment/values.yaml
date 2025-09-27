@@ -106,8 +106,7 @@ service:
   annotations: {}
 
 # Allows to control pod resources
-resources:
-  {}
+resources: {}
   # limits:
   #   cpu: 100m
   #   memory: 128Mi
