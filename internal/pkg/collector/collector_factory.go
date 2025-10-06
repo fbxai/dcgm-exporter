@@ -19,6 +19,7 @@ package collector
 import (
 	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/NVIDIA/go-dcgm/pkg/dcgm"
 
@@ -110,6 +111,18 @@ func (cf *collectorFactory) NewCollectors() []EntityCollectorTuple {
 		}
 	}
 
+	if IsDCGMExpXIDErrorsLogEnabled(cf.counterSet.ExporterCounters) {
+		if newCollector, err := cf.enableExpCollector(counters.DCGMExpXIDErrorsLog); err != nil {
+			slog.Error(fmt.Sprintf("collector '%s' cannot be initialized; err: %v", counters.DCGMExpXIDErrorsLog, err))
+			os.Exit(1)
+		} else {
+			entityCollectorTuples = append(entityCollectorTuples, EntityCollectorTuple{
+				entity:    dcgm.FE_GPU,
+				collector: newCollector,
+			})
+		}
+	}
+
 	if IsDCGMExpGPUHealthStatusEnabled(cf.counterSet.ExporterCounters) {
 		if newCollector, err := cf.enableExpCollector(counters.DCGMExpGPUHealthStatus); err != nil {
 			slog.Error(fmt.Sprintf("collector '%s' cannot be initialized; err: %v", counters.DCGMExpGPUHealthStatus, err))
@@ -166,6 +179,9 @@ func (cf *collectorFactory) enableExpCollector(expCollectorName string) (Collect
 			item)
 	case counters.DCGMExpXIDErrorsCount:
 		newCollector, err = NewXIDCollector(cf.counterSet.ExporterCounters, cf.hostname, cf.config,
+			item)
+	case counters.DCGMExpXIDErrorsLog:
+		newCollector, err = NewJournalctlXIDCollector(cf.counterSet.ExporterCounters, cf.hostname, cf.config,
 			item)
 	case counters.DCGMExpGPUHealthStatus:
 		newCollector, err = NewGPUHealthStatusCollector(cf.counterSet.ExporterCounters,
